@@ -1,0 +1,97 @@
+name: Build pyCmpr Wheel
+
+on:
+  workflow_dispatch:  # run manually via GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    timeout-minutes: 360  # 6 hour limit
+
+    steps:
+      # Step 1: Free up disk space first - critical
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Step 2: System dependencies
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxt-dev libgl1-mesa-dev libgl1-mesa-glx \
+            libglapi-mesa libosmesa-dev libglu1-mesa-dev \
+            build-essential cmake cmake-curses-gui \
+            python3-dev python3-pip git
+
+      # Step 3: Clone and build VMTK (downloads VTK 8.1 + ITK 4.13 automatically)
+      - name: Clone VMTK
+        run: |
+          git clone https://github.com/vmtk/vmtk.git
+          mkdir vmtk-build
+
+      - name: Configure VMTK
+        run: |
+          cd vmtk-build
+          cmake ../vmtk \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVMTK_WITH_RENDERING=ON \
+            -DVMTK_ENABLE_PYTHON_WRAPPING=ON \
+            -DPYTHON_EXECUTABLE=$(which python3) \
+            -DCMAKE_INSTALL_PREFIX=$PWD/Install
+
+      - name: Build VMTK
+        run: |
+          cd vmtk-build
+          make -j$(nproc)
+
+      # Step 4: Build Scyther
+      - name: Clone Scyther and pybind11
+        run: |
+          git clone https://github.com/dvisionlab/Scyther.git
+          git clone https://github.com/pybind/pybind11.git
+          pip3 install pybind11/ --user
+
+      - name: Build Scyther
+        run: |
+          cd Scyther
+          mkdir build && cd build
+          cmake ../src \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUSE_PYTHON_INCLUDE_DIR=ON \
+            -DPYTHON_EXECUTABLE=$(which python3) \
+            -DVMTK_DIR=$GITHUB_WORKSPACE/vmtk-build/Install \
+            -DVTK_DIR=$GITHUB_WORKSPACE/vmtk-build/VTK-build \
+            -DITK_DIR=$GITHUB_WORKSPACE/vmtk-build/ITK-build \
+            -Dpybind11_DIR=$(python3 -c "import pybind11; print(pybind11.get_cmake_dir())")
+          make -j$(nproc)
+
+      # Step 5: Package as wheel and upload
+      - name: Build wheel
+        run: |
+          pip3 install wheel --user
+          mkdir -p wheel_pkg/pyCmpr
+          cp Scyther/build/pyCmpr*.so wheel_pkg/pyCmpr/
+          echo "from .pyCmpr import *" > wheel_pkg/pyCmpr/__init__.py
+          cat > wheel_pkg/setup.py << 'EOF'
+          from setuptools import setup, find_packages
+          setup(name="pyCmpr", version="0.2.1",
+                packages=find_packages(),
+                package_data={"pyCmpr": ["*.so"]})
+          EOF
+          cd wheel_pkg && python3 setup.py bdist_wheel
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyCmpr-wheel
+          path: wheel_pkg/dist/*.whl
+          retention-days: 30
