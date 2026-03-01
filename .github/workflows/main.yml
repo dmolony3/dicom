@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 360  # 6 hour limit
 
     steps:
@@ -21,7 +21,10 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
-
+      - name: python3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.8"
       # Step 2: System dependencies
       - name: Install system deps
         run: |
